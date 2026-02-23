@@ -202,6 +202,16 @@ func detectAiTool(data *AiReviewTaskData, accountId, body string) (string, bool)
 		}
 	}
 
+	// Check Gemini Code Assist
+	if data.Options.ScopeConfig.GeminiEnabled {
+		if data.GeminiUsernameRegex != nil && data.GeminiUsernameRegex.MatchString(accountId) {
+			return models.AiToolGemini, true
+		}
+		if data.GeminiPatternRegex != nil && data.GeminiPatternRegex.MatchString(body) {
+			return models.AiToolGemini, true
+		}
+	}
+
 	return "", false
 }
 

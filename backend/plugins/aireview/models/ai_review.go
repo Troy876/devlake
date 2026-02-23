@@ -85,6 +85,7 @@ const (
 	AiToolCodeRabbit   = "coderabbit"
 	AiToolCursorBugbot = "cursor_bugbot"
 	AiToolQodo         = "qodo"
+	AiToolGemini       = "gemini"
 	AiToolSonarQube    = "sonarqube"
 	AiToolCopilot      = "copilot"
 )
