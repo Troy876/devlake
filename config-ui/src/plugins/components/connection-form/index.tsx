@@ -74,6 +74,12 @@ export const ConnectionForm = ({ plugin, connectionId, onSuccess }: Props) => {
               dbUrl: isEqual(connection?.dbUrl, values.dbUrl) ? undefined : values.dbUrl,
               companyId: isEqual(connection?.companyId, values.companyId) ? undefined : values.companyId,
               organization: isEqual(connection?.organization, values.organization) ? undefined : values.organization,
+              ciTool: isEqual(connection?.ciTool, values.ciTool) ? undefined : values.ciTool,
+              quayOrganization: isEqual(connection?.quayOrganization, values.quayOrganization) ? undefined : values.quayOrganization,
+              githubOrganization: isEqual(connection?.githubOrganization, values.githubOrganization) ? undefined : values.githubOrganization,
+              githubToken: isEqual(connection?.githubToken, values.githubToken) ? undefined : values.githubToken,
+              project: isEqual(connection?.project, values.project) ? undefined : values.project,
+              junitRegex: isEqual(connection?.junitRegex, values.junitRegex) ? undefined : values.junitRegex,
             })
           : API.connection.testOld(
               plugin,
@@ -99,6 +105,12 @@ export const ConnectionForm = ({ plugin, connectionId, onSuccess }: Props) => {
                 'dbUrl',
                 'companyId',
                 'organization',
+                'ciTool',
+                'quayOrganization',
+                'githubOrganization',
+                'githubToken',
+                'project',
+                'junitRegex',
               ]),
             ),
       {

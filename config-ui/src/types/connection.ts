@@ -31,6 +31,12 @@ export interface IConnectionAPI {
   proxy: string;
   rateLimitPerHour?: number;
   organization?: string;
+  ciTool?: string;
+  quayOrganization?: string;
+  githubOrganization?: string;
+  githubToken?: string;
+  project?: string;
+  junitRegex?: string;
 }
 
 export interface IConnectionTestResult {
