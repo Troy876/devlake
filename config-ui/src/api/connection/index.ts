@@ -53,6 +53,12 @@ export const test = (
       | 'dbUrl'
       | 'companyId'
       | 'organization'
+      | 'ciTool'
+      | 'quayOrganization'
+      | 'githubOrganization'
+      | 'githubToken'
+      | 'project'
+      | 'junitRegex'
     >
   >,
 ): Promise<IConnectionTestResult> =>
@@ -72,5 +78,11 @@ export const testOld = (
     | 'proxy'
     | 'dbUrl'
     | 'organization'
+    | 'ciTool'
+    | 'quayOrganization'
+    | 'githubOrganization'
+    | 'githubToken'
+    | 'project'
+    | 'junitRegex'
   >,
 ): Promise<IConnectionOldTestResult> => request(`/plugins/${plugin}/test`, { method: 'post', data: payload });
