@@ -110,6 +110,7 @@ func (p AiReview) SubTaskMetas() []plugin.SubTaskMeta {
 		tasks.EnrichGithubReviewReactionsMeta,
 		tasks.EnrichGitlabReviewReactionsMeta,
 		tasks.ExtractAiReviewFindingsMeta,
+		tasks.FetchMissingCiJobsMeta,
 		tasks.CalculateFailurePredictionsMeta,
 		tasks.CalculatePredictionMetricsMeta,
 	}

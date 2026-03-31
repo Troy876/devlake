@@ -69,6 +69,14 @@ type AiReviewScopeConfig struct {
 
 	// Issue linking patterns (for tracking post-merge bugs)
 	BugLinkPattern string `mapstructure:"bugLinkPattern" json:"bugLinkPattern" gorm:"type:varchar(500)"`
+
+	// CiBackfillEnabled enables fetching CI job results from GCS for PRs that
+	// have AI reviews but no CI data. Disabled by default because it requires
+	// network access to the public Openshift CI GCS bucket.
+	CiBackfillEnabled bool `mapstructure:"ciBackfillEnabled" json:"ciBackfillEnabled" gorm:"type:boolean;default:false"`
+
+	// CiBackfillDays controls how many days back to backfill. Defaults to 180.
+	CiBackfillDays int `mapstructure:"ciBackfillDays" json:"ciBackfillDays" gorm:"default:180"`
 }
 
 // CI failure source constants

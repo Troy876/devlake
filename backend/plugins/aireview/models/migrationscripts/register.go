@@ -30,5 +30,6 @@ func All() []plugin.MigrationScript {
 		&addReactions{},
 		&addCiPredictionFields{},
 		&addCiFailureSource{},
+		&addCiBackfillConfig{},
 	}
 }
