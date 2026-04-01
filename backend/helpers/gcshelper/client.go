@@ -115,6 +115,9 @@ func (b *GCSBucket) GetContent(ctx context.Context, path string) ([]byte, errors
 		return nil, errors.Default.Wrap(err, "error reading GCS attributes")
 	}
 	obj = obj.Generation(objAttrs.Generation)
+	if objAttrs.Size > maxFileSize {
+		return nil, errors.Default.New(fmt.Sprintf("GCS object too large (%d bytes, limit %d)", objAttrs.Size, maxFileSize))
+	}
 
 	gcsReader, err := obj.NewReader(ctx)
 	if err != nil {

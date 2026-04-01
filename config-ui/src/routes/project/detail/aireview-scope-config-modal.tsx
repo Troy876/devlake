@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Checkbox, Collapse, Divider, Form, Input, InputNumber, Modal, Select, Space, Spin, Typography } from 'antd';
+import { Checkbox, Collapse, Divider, Form, Input, InputNumber, message, Modal, Select, Space, Spin, Typography } from 'antd';
 
 import API from '@/api';
 import { IAiReviewScopeConfig } from '@/api/plugin/aireview';
@@ -84,7 +84,11 @@ export const AiReviewScopeConfigModal = ({ scopeConfigId, onCancel, onSave }: Pr
         const config = scopeConfigId
           ? await API.plugin.aireview.getScopeConfig(scopeConfigId)
           : await API.plugin.aireview.getDefaultScopeConfig();
-        form.setFieldsValue(config);
+        if (config) {
+          form.setFieldsValue(config);
+        }
+      } catch {
+        message.error('Failed to load configuration.');
       } finally {
         setLoading(false);
       }
@@ -99,7 +103,13 @@ export const AiReviewScopeConfigModal = ({ scopeConfigId, onCancel, onSave }: Pr
       const saved = scopeConfigId
         ? await API.plugin.aireview.updateScopeConfig(scopeConfigId, values)
         : await API.plugin.aireview.createScopeConfig(values);
-      onSave(saved.id!);
+      if (saved.id == null) {
+        message.error('Saved configuration is missing an ID.');
+        return;
+      }
+      onSave(saved.id);
+    } catch {
+      message.error('Failed to save configuration. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -151,6 +161,23 @@ export const AiReviewScopeConfigModal = ({ scopeConfigId, onCancel, onSave }: Pr
               </Select>
             </Form.Item>
           </Space>
+
+          {/* ── CI Backfill ── */}
+          <Divider orientation="left" plain>
+            CI Data Backfill (Openshift CI / GCS)
+          </Divider>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+            Fetch historical CI job results from the public Openshift CI GCS bucket for PRs that have AI reviews but no
+            CI data yet. Requires network access to GCS. Set to 0 to disable backfill.
+          </Text>
+          <Form.Item
+            label="Backfill window (days)"
+            name="ciBackfillDays"
+            tooltip="How many days back to look for missing CI data. Set to 0 to disable."
+            style={{ marginBottom: 16 }}
+          >
+            <InputNumber min={0} max={3650} style={{ width: 120 }} />
+          </Form.Item>
 
           {/* ── Tool Detection ── */}
           <Divider orientation="left" plain>

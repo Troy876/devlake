@@ -260,12 +260,14 @@ func fetchProwJobsFromAPI(taskCtx plugin.SubTaskContext) ([]ProwJob, errors.Erro
 		resp, fetchErr := apiClient.Get(ProwJobsPath, nil, nil)
 		if fetchErr != nil {
 			lastErr = errors.Default.Wrap(fetchErr, "failed to fetch Prow jobs")
-			logger.Warn(lastErr, "Prow API request failed (attempt %d/%d), retrying in %s", attempt, prowMaxRetries, prowRetryBaseWait)
-			time.Sleep(prowRetryBaseWait * time.Duration(attempt))
+			wait := prowRetryBaseWait * time.Duration(attempt)
+			logger.Warn(lastErr, "Prow API request failed (attempt %d/%d), retrying in %s", attempt, prowMaxRetries, wait)
+			time.Sleep(wait)
 			continue
 		}
 
 		if isTransientStatusCode(resp.StatusCode) {
+			_ = resp.Body.Close()
 			lastErr = errors.Default.New(fmt.Sprintf("Prow API returned status %d", resp.StatusCode))
 			wait := prowRetryBaseWait * time.Duration(attempt)
 			logger.Warn(lastErr, "Prow API transient error (attempt %d/%d), retrying in %s", attempt, prowMaxRetries, wait)
@@ -274,6 +276,7 @@ func fetchProwJobsFromAPI(taskCtx plugin.SubTaskContext) ([]ProwJob, errors.Erro
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
 			return nil, errors.Default.New(fmt.Sprintf("Prow API returned status %d", resp.StatusCode))
 		}
 

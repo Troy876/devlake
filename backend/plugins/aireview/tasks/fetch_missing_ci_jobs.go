@@ -76,8 +76,8 @@ func FetchMissingCiJobs(taskCtx plugin.SubTaskContext) errors.Error {
 	data := taskCtx.GetData().(*AiReviewTaskData)
 
 	cfg := data.Options.ScopeConfig
-	if cfg == nil || !cfg.CiBackfillEnabled {
-		logger.Debug("CI backfill disabled, skipping fetchMissingCiJobs")
+	if cfg == nil || cfg.CiBackfillDays <= 0 {
+		logger.Debug("CI backfill disabled (ciBackfillDays=0), skipping fetchMissingCiJobs")
 		return nil
 	}
 
@@ -161,6 +161,22 @@ func (missingPRRow) TableName() string { return "_tool_aireview_reviews" }
 // findMissingPRs returns PRs in the given repo that have at least one non-skipped
 // AI review but no matching row in ci_test_jobs for a pull_request trigger.
 func findMissingPRs(db dal.Dal, repoId string, cutoff time.Time) ([]missingPR, error) {
+	// Pre-compute the short repo name (part after the last "/") to avoid
+	// MySQL-specific SUBSTRING_INDEX inside the SQL subquery.
+	var repoRows []struct {
+		Name string `gorm:"column:name"`
+	}
+	if dbErr := db.All(&repoRows, dal.Select("name"), dal.From("repos"), dal.Where("id = ?", repoId), dal.Limit(1)); dbErr != nil {
+		return nil, fmt.Errorf("querying repo name for %s: %w", repoId, dbErr)
+	}
+	if len(repoRows) == 0 {
+		return nil, fmt.Errorf("repo %s not found", repoId)
+	}
+	repoShort := repoRows[0].Name
+	if i := strings.LastIndex(repoShort, "/"); i >= 0 {
+		repoShort = repoShort[i+1:]
+	}
+
 	var rawRows []missingPRRow
 	err := db.All(&rawRows,
 		dal.Select("DISTINCT pr.pull_request_key, r.name AS repo_name"),
@@ -173,9 +189,9 @@ func findMissingPRs(db dal.Dal, repoId string, cutoff time.Time) ([]missingPR, e
 			AND NOT EXISTS (
 				SELECT 1 FROM ci_test_jobs j
 				WHERE CAST(j.pull_request_number AS CHAR) = pr.pull_request_key
-				  AND j.repository = SUBSTRING_INDEX(r.name, '/', -1)
+				  AND j.repository = ?
 				  AND j.trigger_type = 'pull_request'
-			)`, repoId, cutoff),
+			)`, repoId, cutoff, repoShort),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying missing PRs: %w", err)

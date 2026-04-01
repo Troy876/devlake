@@ -217,7 +217,7 @@ func TestCalculatePredictionMetrics(t *testing.T) {
 		}
 		// With 4 PRs: TP=1, FP=1, FN=1, TN=1 at threshold=50
 		// Precision = 1/(1+1) = 0.5, Recall = 1/(1+1) = 0.5
-		if m.TruePositives < 0 || m.FalsePositives < 0 {
+		if m.TruePositives < 0 || m.FalsePositives < 0 || m.FalseNegatives < 0 || m.TrueNegatives < 0 {
 			t.Errorf("Invalid confusion matrix: TP=%d FP=%d FN=%d TN=%d", m.TruePositives, m.FalsePositives, m.FalseNegatives, m.TrueNegatives)
 		}
 		if m.WarningThreshold != 50 {
@@ -233,6 +233,62 @@ func TestCalculatePredictionMetrics(t *testing.T) {
 			m.TruePositives, m.FalsePositives, m.FalseNegatives, m.TrueNegatives,
 			m.Precision, m.Recall, m.PrAuc, m.RocAuc)
 		break
+	}
+}
+
+// TestCalculateFailurePredictions_NoCiData verifies that when a repo has AI
+// reviews but no CI data (e.g. TestRegistry is not configured), no predictions
+// are written. Before the fix, every flagged PR was incorrectly classified as
+// FP because missing CI data was treated as "CI passed".
+func TestCalculateFailurePredictions_NoCiData(t *testing.T) {
+	const repoId = "github:GithubRepo:1:999"
+
+	var plugin impl.AiReview
+	tester := e2ehelper.NewDataFlowTester(t, "aireview", plugin)
+
+	scopeConfig := models.GetDefaultScopeConfig()
+	scopeConfig.WarningThreshold = 50
+
+	taskData := &tasks.AiReviewTaskData{
+		Options: &tasks.AiReviewOptions{
+			RepoId:      repoId,
+			ScopeConfig: scopeConfig,
+		},
+	}
+	if err := tasks.CompilePatterns(taskData); err != nil {
+		t.Fatalf("CompilePatterns: %v", err)
+	}
+
+	tester.FlushTabler(&crossdomain.Account{})
+	tester.FlushTabler(&code.PullRequest{})
+	tester.FlushTabler(&code.PullRequestComment{})
+	tester.FlushTabler(&models.AiReview{})
+	tester.FlushTabler(&models.AiFailurePrediction{})
+	tester.FlushTabler(&ciTestJob{})
+	tester.FlushTabler(&ciTestCase{})
+	tester.FlushTabler(&repoRow{})
+
+	// Import PRs and AI review comments — but intentionally NO ci_test_jobs rows.
+	tester.ImportCsvIntoTabler("./raw_tables/no_ci_pull_requests.csv", &code.PullRequest{})
+	tester.ImportCsvIntoTabler("./raw_tables/no_ci_pull_request_comments.csv", &code.PullRequestComment{})
+	tester.ImportCsvIntoTabler("./raw_tables/no_ci_repos.csv", &repoRow{})
+
+	tester.Subtask(tasks.ExtractAiReviewsMeta, taskData)
+	tester.Subtask(tasks.CalculateFailurePredictionsMeta, taskData)
+
+	var predictions []models.AiFailurePrediction
+	if err := tester.Dal.All(&predictions); err != nil {
+		t.Fatalf("Failed to query predictions: %v", err)
+	}
+
+	// Key assertion: repos without CI data must produce zero predictions,
+	// not FP rows for every flagged PR.
+	if len(predictions) != 0 {
+		t.Errorf("expected 0 predictions for repo with no CI data, got %d", len(predictions))
+		for _, p := range predictions {
+			t.Logf("  spurious prediction: PR=%s outcome=%s flagged=%v hadCI=%v",
+				p.PullRequestKey, p.PredictionOutcome, p.WasFlaggedRisky, p.HadCiFailure)
+		}
 	}
 }
 

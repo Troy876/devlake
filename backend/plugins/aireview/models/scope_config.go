@@ -65,7 +65,7 @@ type AiReviewScopeConfig struct {
 	// "test_cases": join ci_test_cases with flaky-test quarantine (accurate, needs full collection)
 	// "job_result": use ci_test_jobs.result directly (fast, works without artifact collection)
 	// "both": compute predictions for both sources (stored with ci_failure_source tag)
-	CiFailureSource string `mapstructure:"ciFailureSource" json:"ciFailureSource" gorm:"type:varchar(20);default:'job_result'"`
+	CiFailureSource string `mapstructure:"ciFailureSource" json:"ciFailureSource" gorm:"type:varchar(20);default:'both'"`
 
 	// Issue linking patterns (for tracking post-merge bugs)
 	BugLinkPattern string `mapstructure:"bugLinkPattern" json:"bugLinkPattern" gorm:"type:varchar(500)"`
@@ -75,8 +75,10 @@ type AiReviewScopeConfig struct {
 	// network access to the public Openshift CI GCS bucket.
 	CiBackfillEnabled bool `mapstructure:"ciBackfillEnabled" json:"ciBackfillEnabled" gorm:"type:boolean;default:false"`
 
-	// CiBackfillDays controls how many days back to backfill. Defaults to 180.
-	CiBackfillDays int `mapstructure:"ciBackfillDays" json:"ciBackfillDays" gorm:"default:180"`
+	// CiBackfillDays controls how many days back to backfill CI data from GCS.
+	// 0 (the default) disables backfill. The task derives enabled/disabled from
+	// this value: CiBackfillDays > 0 means backfill is active.
+	CiBackfillDays int `mapstructure:"ciBackfillDays" json:"ciBackfillDays" gorm:"default:0"`
 }
 
 // CI failure source constants

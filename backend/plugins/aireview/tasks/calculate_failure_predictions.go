@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/apache/incubator-devlake/core/dal"
@@ -139,13 +140,20 @@ func CalculateFailurePredictions(taskCtx plugin.SubTaskContext) errors.Error {
 		logger.Info("Source %s: loaded CI outcomes for %d (PR, repo) pairs", source, len(ciOutcomes))
 
 		batch := make([]*models.AiFailurePrediction, 0, 100)
+		writtenThisSource := 0
 		for i := range prSummaries {
 			ps := &prSummaries[i]
 			ciKey := prCiKey{PullRequestNumber: ps.PullRequestKey, Repository: ps.RepoShortName}
 			outcome, hasCiData := ciOutcomes[ciKey]
 
+			// Skip PRs with no CI data — we cannot distinguish a true pass from
+			// a missing CI pipeline, so classifying them as FP/TN would be misleading.
+			if !hasCiData {
+				continue
+			}
+
 			wasFlaggedRisky := ps.MaxRiskScore >= warningThreshold
-			hadCiFailure := hasCiData && outcome.HadNonFlakyFailure
+			hadCiFailure := outcome.HadNonFlakyFailure
 
 			predictionOutcome := calculateOutcome(wasFlaggedRisky, hadCiFailure)
 
@@ -164,6 +172,7 @@ func CalculateFailurePredictions(taskCtx plugin.SubTaskContext) errors.Error {
 				ObservationWindowDays: 0,
 				CreatedAt:             now,
 			})
+			writtenThisSource++
 
 			if len(batch) >= 100 {
 				if saveErr := savePredictionsBatch(db, batch); saveErr != nil {
@@ -178,7 +187,7 @@ func CalculateFailurePredictions(taskCtx plugin.SubTaskContext) errors.Error {
 				return saveErr
 			}
 		}
-		totalWritten += len(prSummaries)
+		totalWritten += writtenThisSource
 	}
 
 	logger.Info("Completed failure prediction calculation: %d predictions written", totalWritten)
@@ -248,7 +257,7 @@ func loadAiReviewPrSummaries(db dal.Dal, repoId, projectName string) ([]prAiSumm
 		PullRequestId  string `gorm:"column:pull_request_id"`
 		PullRequestKey string `gorm:"column:pull_request_key"`
 		RepoId         string `gorm:"column:repo_id"`
-		RepoShortName  string `gorm:"column:repo_short_name"`
+		RepoName       string `gorm:"column:repo_name"`
 		AiTool         string `gorm:"column:ai_tool"`
 		MaxRiskScore   int    `gorm:"column:max_risk_score"`
 	}
@@ -256,22 +265,22 @@ func loadAiReviewPrSummaries(db dal.Dal, repoId, projectName string) ([]prAiSumm
 	var clauses []dal.Clause
 	if repoId != "" {
 		clauses = []dal.Clause{
-			dal.Select("ar.pull_request_id, pr.pull_request_key, ar.repo_id, SUBSTRING_INDEX(r.name, '/', -1) AS repo_short_name, ar.ai_tool, MAX(ar.risk_score) AS max_risk_score"),
+			dal.Select("ar.pull_request_id, pr.pull_request_key, ar.repo_id, r.name AS repo_name, ar.ai_tool, MAX(ar.risk_score) AS max_risk_score"),
 			dal.From("_tool_aireview_reviews ar"),
 			dal.Join("JOIN pull_requests pr ON ar.pull_request_id = pr.id"),
 			dal.Join("JOIN repos r ON ar.repo_id = r.id"),
 			dal.Where("ar.repo_id = ? AND ar.body NOT LIKE '%Review skipped%'", repoId),
-			dal.Groupby("ar.pull_request_id, pr.pull_request_key, ar.repo_id, repo_short_name, ar.ai_tool"),
+			dal.Groupby("ar.pull_request_id, pr.pull_request_key, ar.repo_id, r.name, ar.ai_tool"),
 		}
 	} else {
 		clauses = []dal.Clause{
-			dal.Select("ar.pull_request_id, pr.pull_request_key, ar.repo_id, SUBSTRING_INDEX(r.name, '/', -1) AS repo_short_name, ar.ai_tool, MAX(ar.risk_score) AS max_risk_score"),
+			dal.Select("ar.pull_request_id, pr.pull_request_key, ar.repo_id, r.name AS repo_name, ar.ai_tool, MAX(ar.risk_score) AS max_risk_score"),
 			dal.From("_tool_aireview_reviews ar"),
 			dal.Join("JOIN pull_requests pr ON ar.pull_request_id = pr.id"),
 			dal.Join("JOIN repos r ON ar.repo_id = r.id"),
 			dal.Join("JOIN project_mapping pm ON ar.repo_id = pm.row_id AND pm.`table` = 'repos'"),
 			dal.Where("pm.project_name = ? AND ar.body NOT LIKE '%Review skipped%'", projectName),
-			dal.Groupby("ar.pull_request_id, pr.pull_request_key, ar.repo_id, repo_short_name, ar.ai_tool"),
+			dal.Groupby("ar.pull_request_id, pr.pull_request_key, ar.repo_id, r.name, ar.ai_tool"),
 		}
 	}
 
@@ -286,7 +295,7 @@ func loadAiReviewPrSummaries(db dal.Dal, repoId, projectName string) ([]prAiSumm
 			PullRequestId:  r.PullRequestId,
 			PullRequestKey: r.PullRequestKey,
 			RepoId:         r.RepoId,
-			RepoShortName:  r.RepoShortName,
+			RepoShortName:  repoShortNameFrom(r.RepoName),
 			AiTool:         r.AiTool,
 			MaxRiskScore:   r.MaxRiskScore,
 		}
@@ -318,7 +327,7 @@ func loadCiOutcomesByTestCases(db dal.Dal, repoShortNames []string, flakyTests m
 		dal.Select("j.pull_request_number, j.repository, tc.name AS test_name, tc.status"),
 		dal.From("ci_test_jobs j"),
 		dal.Join("JOIN ci_test_cases tc ON j.connection_id = tc.connection_id AND j.job_id = tc.job_id"),
-		dal.Where("j.trigger_type = 'pull_request' AND j.pull_request_number > 0 AND j.repository IN ?", repoShortNames),
+		dal.Where("j.trigger_type = 'pull_request' AND j.pull_request_number > 0 AND j.repository IN ? AND j.finished_at >= ?", repoShortNames, time.Now().AddDate(0, -3, 0)),
 	)
 	if err != nil {
 		return nil, errors.Default.Wrap(err, "failed to load CI test case outcomes")
@@ -368,7 +377,7 @@ func loadCiOutcomesByJobResult(db dal.Dal, repoShortNames []string, flakyJobs ma
 	err := db.All(&rows,
 		dal.Select("pull_request_number, repository, job_name, result"),
 		dal.From("ci_test_jobs"),
-		dal.Where("trigger_type = 'pull_request' AND pull_request_number > 0 AND repository IN ?", repoShortNames),
+		dal.Where("trigger_type = 'pull_request' AND pull_request_number > 0 AND repository IN ? AND finished_at >= ?", repoShortNames, time.Now().AddDate(0, -3, 0)),
 	)
 	if err != nil {
 		return nil, errors.Default.Wrap(err, "failed to load CI job outcomes")
@@ -429,6 +438,15 @@ func calculateOutcome(wasFlaggedRisky, actualFailure bool) string {
 func generatePredictionId(prId, aiTool, ciFailureSource string) string {
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s", prId, aiTool, ciFailureSource)))
 	return "aipred:" + hex.EncodeToString(hash[:16])
+}
+
+// repoShortNameFrom extracts the repository short name (the part after the last "/")
+// from a full "org/repo" name. This avoids MySQL-specific SUBSTRING_INDEX in SQL.
+func repoShortNameFrom(fullName string) string {
+	if i := strings.LastIndex(fullName, "/"); i >= 0 {
+		return fullName[i+1:]
+	}
+	return fullName
 }
 
 // savePredictionsBatch upserts a batch of predictions.
