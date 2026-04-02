@@ -46,9 +46,16 @@ type prAiSummary struct {
 	PullRequestKey string
 	RepoId         string
 	RepoShortName  string
+	RepoName       string
 	AiTool         string
 	MaxRiskScore   int
 	CreatedDate    time.Time
+	PrTitle        string
+	PrUrl          string
+	PrAuthor       string
+	PrCreatedAt    time.Time
+	Additions      int
+	Deletions      int
 }
 
 // prCiKey identifies a PR in the ci_test_jobs table.
@@ -127,6 +134,10 @@ func CalculateFailurePredictions(taskCtx plugin.SubTaskContext) errors.Error {
 	now := time.Now()
 	totalWritten := 0
 
+	// Track which (pullRequestId, aiTool) pairs matched CI data in at least one source.
+	// Unmatched pairs get a NO_CI record so they are visible in drill-down dashboards.
+	coveredKeys := make(map[string]bool, len(prSummaries))
+
 	for _, source := range sources {
 		var ciOutcomes map[prCiKey]ciOutcomeEntry
 		switch source {
@@ -147,16 +158,13 @@ func CalculateFailurePredictions(taskCtx plugin.SubTaskContext) errors.Error {
 			ciKey := prCiKey{PullRequestNumber: ps.PullRequestKey, Repository: ps.RepoShortName}
 			outcome, hasCiData := ciOutcomes[ciKey]
 
-			// Skip PRs with no CI data — we cannot distinguish a true pass from
-			// a missing CI pipeline, so classifying them as FP/TN would be misleading.
 			if !hasCiData {
 				continue
 			}
+			coveredKeys[ps.PullRequestId+":"+ps.AiTool] = true
 
 			wasFlaggedRisky := ps.MaxRiskScore >= warningThreshold
 			hadCiFailure := outcome.HadNonFlakyFailure
-
-			predictionOutcome := calculateOutcome(wasFlaggedRisky, hadCiFailure)
 
 			batch = append(batch, &models.AiFailurePrediction{
 				Id:                    generatePredictionId(ps.PullRequestId, ps.AiTool, source),
@@ -164,13 +172,20 @@ func CalculateFailurePredictions(taskCtx plugin.SubTaskContext) errors.Error {
 				PullRequestKey:        ps.PullRequestKey,
 				RepoId:                ps.RepoId,
 				RepoShortName:         ps.RepoShortName,
+				RepoName:              ps.RepoName,
 				AiTool:                ps.AiTool,
 				CiFailureSource:       source,
 				WasFlaggedRisky:       wasFlaggedRisky,
 				RiskScore:             ps.MaxRiskScore,
 				FlaggedAt:             ps.CreatedDate,
 				HadCiFailure:          hadCiFailure,
-				PredictionOutcome:     predictionOutcome,
+				PredictionOutcome:     calculateOutcome(wasFlaggedRisky, hadCiFailure),
+				PrTitle:               ps.PrTitle,
+				PrUrl:                 ps.PrUrl,
+				PrAuthor:              ps.PrAuthor,
+				PrCreatedAt:           ps.PrCreatedAt,
+				Additions:             ps.Additions,
+				Deletions:             ps.Deletions,
 				ObservationWindowDays: 0,
 				CreatedAt:             now,
 			})
@@ -192,7 +207,54 @@ func CalculateFailurePredictions(taskCtx plugin.SubTaskContext) errors.Error {
 		totalWritten += writtenThisSource
 	}
 
-	logger.Info("Completed failure prediction calculation: %d predictions written", totalWritten)
+	// Write one NO_CI record per (PR, AI tool) pair that had no CI data in any source.
+	// This makes unclassified PRs visible in drill-down dashboards.
+	noCiBatch := make([]*models.AiFailurePrediction, 0, 100)
+	for i := range prSummaries {
+		ps := &prSummaries[i]
+		if coveredKeys[ps.PullRequestId+":"+ps.AiTool] {
+			continue
+		}
+		noCiBatch = append(noCiBatch, &models.AiFailurePrediction{
+			Id:                    generatePredictionId(ps.PullRequestId, ps.AiTool, models.CiSourceNone),
+			PullRequestId:         ps.PullRequestId,
+			PullRequestKey:        ps.PullRequestKey,
+			RepoId:                ps.RepoId,
+			RepoShortName:         ps.RepoShortName,
+			RepoName:              ps.RepoName,
+			AiTool:                ps.AiTool,
+			CiFailureSource:       models.CiSourceNone,
+			WasFlaggedRisky:       ps.MaxRiskScore >= warningThreshold,
+			RiskScore:             ps.MaxRiskScore,
+			FlaggedAt:             ps.CreatedDate,
+			HadCiFailure:          false,
+			PredictionOutcome:     models.PredictionNoCi,
+			PrTitle:               ps.PrTitle,
+			PrUrl:                 ps.PrUrl,
+			PrAuthor:              ps.PrAuthor,
+			PrCreatedAt:           ps.PrCreatedAt,
+			Additions:             ps.Additions,
+			Deletions:             ps.Deletions,
+			ObservationWindowDays: 0,
+			CreatedAt:             now,
+		})
+		totalWritten++
+
+		if len(noCiBatch) >= 100 {
+			if saveErr := savePredictionsBatch(db, noCiBatch); saveErr != nil {
+				return saveErr
+			}
+			noCiBatch = noCiBatch[:0]
+		}
+	}
+	if len(noCiBatch) > 0 {
+		if saveErr := savePredictionsBatch(db, noCiBatch); saveErr != nil {
+			return saveErr
+		}
+	}
+
+	logger.Info("Completed failure prediction calculation: %d predictions written (%d NO_CI)",
+		totalWritten, len(noCiBatch))
 	return nil
 }
 
@@ -263,12 +325,23 @@ func loadAiReviewPrSummaries(db dal.Dal, repoId, projectName string) ([]prAiSumm
 		AiTool         string    `gorm:"column:ai_tool"`
 		MaxRiskScore   int       `gorm:"column:max_risk_score"`
 		CreatedDate    time.Time `gorm:"column:created_date"`
+		PrTitle        string    `gorm:"column:pr_title"`
+		PrUrl          string    `gorm:"column:pr_url"`
+		PrAuthor       string    `gorm:"column:pr_author"`
+		PrCreatedAt    time.Time `gorm:"column:pr_created_at"`
+		Additions      int       `gorm:"column:additions"`
+		Deletions      int       `gorm:"column:deletions"`
 	}
+
+	const selectCols = "ar.pull_request_id, pr.pull_request_key, ar.repo_id, r.name AS repo_name, ar.ai_tool," +
+		" MAX(ar.risk_score) AS max_risk_score, MIN(ar.created_date) AS created_date," +
+		" MAX(pr.title) AS pr_title, MAX(pr.url) AS pr_url, MAX(pr.author_name) AS pr_author," +
+		" MAX(pr.created_date) AS pr_created_at, MAX(pr.additions) AS additions, MAX(pr.deletions) AS deletions"
 
 	var clauses []dal.Clause
 	if repoId != "" {
 		clauses = []dal.Clause{
-			dal.Select("ar.pull_request_id, pr.pull_request_key, ar.repo_id, r.name AS repo_name, ar.ai_tool, MAX(ar.risk_score) AS max_risk_score, MIN(ar.created_date) AS created_date"),
+			dal.Select(selectCols),
 			dal.From("_tool_aireview_reviews ar"),
 			dal.Join("JOIN pull_requests pr ON ar.pull_request_id = pr.id"),
 			dal.Join("JOIN repos r ON ar.repo_id = r.id"),
@@ -277,7 +350,7 @@ func loadAiReviewPrSummaries(db dal.Dal, repoId, projectName string) ([]prAiSumm
 		}
 	} else {
 		clauses = []dal.Clause{
-			dal.Select("ar.pull_request_id, pr.pull_request_key, ar.repo_id, r.name AS repo_name, ar.ai_tool, MAX(ar.risk_score) AS max_risk_score, MIN(ar.created_date) AS created_date"),
+			dal.Select(selectCols),
 			dal.From("_tool_aireview_reviews ar"),
 			dal.Join("JOIN pull_requests pr ON ar.pull_request_id = pr.id"),
 			dal.Join("JOIN repos r ON ar.repo_id = r.id"),
@@ -299,9 +372,16 @@ func loadAiReviewPrSummaries(db dal.Dal, repoId, projectName string) ([]prAiSumm
 			PullRequestKey: r.PullRequestKey,
 			RepoId:         r.RepoId,
 			RepoShortName:  repoShortNameFrom(r.RepoName),
+			RepoName:       r.RepoName,
 			AiTool:         r.AiTool,
 			MaxRiskScore:   r.MaxRiskScore,
 			CreatedDate:    r.CreatedDate,
+			PrTitle:        r.PrTitle,
+			PrUrl:          r.PrUrl,
+			PrAuthor:       r.PrAuthor,
+			PrCreatedAt:    r.PrCreatedAt,
+			Additions:      r.Additions,
+			Deletions:      r.Deletions,
 		}
 	}
 	return summaries, nil

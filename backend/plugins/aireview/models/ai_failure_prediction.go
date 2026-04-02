@@ -43,11 +43,22 @@ type AiFailurePrediction struct {
 	// Short repo name (after '/') — used to join with ci_test_jobs.repository
 	RepoShortName string `gorm:"type:varchar(255)"`
 
+	// Full org/repo name — for display in dashboards
+	RepoName string `gorm:"type:varchar(255)"`
+
 	// AI tool that made the prediction
 	AiTool string `gorm:"type:varchar(100)"`
 
-	// Which CI data source was used: "test_cases" or "job_result"
+	// Which CI data source was used: "test_cases", "job_result", or "none" (NO_CI records)
 	CiFailureSource string `gorm:"type:varchar(20);index"`
+
+	// PR display metadata — denormalised for performant dashboard drill-down
+	PrTitle     string `gorm:"type:varchar(500)"`
+	PrUrl       string `gorm:"type:varchar(1024)"`
+	PrAuthor    string `gorm:"type:varchar(255)"`
+	PrCreatedAt time.Time
+	Additions   int
+	Deletions   int
 
 	// Prediction data
 	WasFlaggedRisky bool      // Did AI flag this PR as risky?
@@ -69,7 +80,7 @@ type AiFailurePrediction struct {
 	// FP: WasFlaggedRisky=true AND NOT (HadCiFailure OR HadBugReported)
 	// FN: WasFlaggedRisky=false AND (HadCiFailure OR HadBugReported)
 	// TN: WasFlaggedRisky=false AND NOT (HadCiFailure OR HadBugReported)
-	PredictionOutcome string `gorm:"type:varchar(20)"` // TP, FP, FN, TN
+	PredictionOutcome string `gorm:"type:varchar(20)"` // TP, FP, FN, TN, NO_CI
 
 	// Time windows
 	ObservationWindowDays int       // How many days after merge to track (default 14)
@@ -86,10 +97,16 @@ func (AiFailurePrediction) TableName() string {
 
 // Prediction outcome constants
 const (
-	PredictionTP = "TP" // True Positive: AI flagged, failure occurred
-	PredictionFP = "FP" // False Positive: AI flagged, no failure
-	PredictionFN = "FN" // False Negative: AI didn't flag, failure occurred
-	PredictionTN = "TN" // True Negative: AI didn't flag, no failure
+	PredictionTP   = "TP"    // True Positive: AI flagged, failure occurred
+	PredictionFP   = "FP"    // False Positive: AI flagged, no failure
+	PredictionFN   = "FN"    // False Negative: AI didn't flag, failure occurred
+	PredictionTN   = "TN"    // True Negative: AI didn't flag, no failure
+	PredictionNoCi = "NO_CI" // No CI data found for this PR in any source
+
+	// CiSourceNone is the ci_failure_source value used for NO_CI prediction records.
+	// These records represent AI-reviewed PRs for which no matching CI pipeline data
+	// was found, so TP/FP/FN/TN classification is not possible.
+	CiSourceNone = "none"
 )
 
 // AiPredictionMetrics stores aggregated prediction metrics for reporting

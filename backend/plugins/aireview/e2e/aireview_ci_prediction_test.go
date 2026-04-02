@@ -281,14 +281,19 @@ func TestCalculateFailurePredictions_NoCiData(t *testing.T) {
 		t.Fatalf("Failed to query predictions: %v", err)
 	}
 
-	// Key assertion: repos without CI data must produce zero predictions,
-	// not FP rows for every flagged PR.
-	if len(predictions) != 0 {
-		t.Errorf("expected 0 predictions for repo with no CI data, got %d", len(predictions))
-		for _, p := range predictions {
-			t.Logf("  spurious prediction: PR=%s outcome=%s flagged=%v hadCI=%v",
+	// Key assertion: PRs without CI data must produce NO_CI records (not TP/FP/FN/TN).
+	// This makes them visible in drill-down dashboards while keeping confusion matrix clean.
+	for _, p := range predictions {
+		if p.PredictionOutcome != models.PredictionNoCi {
+			t.Errorf("PR %s: expected NO_CI outcome for PR with no CI data, got %s (flagged=%v hadCI=%v)",
 				p.PullRequestKey, p.PredictionOutcome, p.WasFlaggedRisky, p.HadCiFailure)
 		}
+		if p.CiFailureSource != models.CiSourceNone {
+			t.Errorf("PR %s: expected ci_failure_source=%q, got %q", p.PullRequestKey, models.CiSourceNone, p.CiFailureSource)
+		}
+	}
+	if len(predictions) == 0 {
+		t.Error("expected NO_CI predictions for AI-reviewed PRs with no CI data, got none")
 	}
 }
 

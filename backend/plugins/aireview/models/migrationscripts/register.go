@@ -32,5 +32,6 @@ func All() []plugin.MigrationScript {
 		&addCiFailureSource{},
 		&addCiBackfillConfig{},
 		&cleanupNullCiSourcePredictions{},
+		&addPrMetadataToPredictions{},
 	}
 }
